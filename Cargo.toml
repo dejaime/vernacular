@@ -1,6 +1,6 @@
 [package]
 name = "vernacular"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 authors = ["Dejaime de Oliveira <contact@dejai.me>"]
