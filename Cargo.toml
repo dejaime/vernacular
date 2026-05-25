@@ -3,5 +3,10 @@ name = "vernacular"
 version = "0.1.0"
 edition = "2024"
 
+authors = ["Dejaime de Oliveira <contact@dejai.me>"]
+license = "MIT OR Apache-2.0 OR GPL-3.0-only OR LGPL-3.0-only"
+
+description = "A dead-simple localization crate for Rust game development."
+
 [dependencies]
 ron = "0.12"
