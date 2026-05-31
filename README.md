@@ -57,9 +57,9 @@ fn main() {
 
 ## Roadmap
 
-- Ron based Key-Value Lookup []
-- Editor Friendly Codegen Key Enum []
-- Fluent Support []
+- Ron based Key-Value Lookup [ ]
+- Editor Friendly Codegen Key Enum [ ]
+- Fluent (.ftl) Support [ ]
 
 ---
 
