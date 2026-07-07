@@ -5,61 +5,159 @@ A dead-simple localization crate for Rust game development.
 
 ---
 
+## Features
+
+- **CSV and RON** translation files — use whichever fits your workflow.
+- **Fixed fallback** — missing keys in the active locale automatically fall back to `en_US` to survive missing or broken data.
+- **Global singleton or owned contexts** — a one-liner API for games, and an explicit `VernacularContext` for tests/tools.
+- **Deterministic load order** — files are processed alphabetically; RON overwrites CSV for predictable precedence.
+- **Hot-reload** — call `reload()` to re-read all translation files from disk.
+
+---
+
+## Directory Layout
+
+Organize your translation files under a *content path* directory (default: `assets/loc`):
+
+```text
+assets/loc/
+├── items.csv               # Root-level "unified" CSV (all locales in columns)
+├── en_US/
+│   ├── items.csv           # Per-locale CSV (key,value pairs)
+│   └── ui.ron              # Per-locale RON (key-value map)
+└── ja_JP/
+    ├── items.csv
+    └── ui.ron
+```
+
+**Root CSVs** use a header row to name the locale columns:
+
+```csv
+locale,en_US,ja_JP
+items.sword,Iron Sword,鉄の剣
+items.shield,Wooden Shield,木の盾
+```
+
+**Per-locale RON files** are simple key-value maps:
+
+```ron
+{
+    "ui.main_menu.start_game": "Start Game",
+    "dialogue.greetings": "Hello there, {}!",
+}
+```
+
+**Per-locale CSVs** are two-column `key,value` files (no header):
+
+```csv
+items.sword,Iron Sword
+items.shield,Wooden Shield
+```
+
+> [!NOTE]
+> If you need to intentionally define an empty string translation (e.g., to hide a label in a specific locale), use a single space `" "` in your CSV, or use a RON file which natively supports empty strings `""`. Completely empty CSV cells are treated as missing data, and will cause Vernacular to fall back to the fallback locale.
+
+---
+
 ## Example Usage
 
-First, organize your localization strings into domain-specific RON files within locale directories:
+### Global Singleton (simplest)
 
-**`assets/loc/en_US/ui.ron`**
-```ron
-{
-	"ui.main_menu.start_game": "Start Game",
-}
-```
-
-**`assets/loc/en_US/dialogue.ron`**
-```ron
-{
-	"dialogue.greetings": "Hello there, {}!",
-}
-```
-
-**`Equivalents in ja_JP`**
-```ron
-	"ui.main_menu.start_game": "ゲーム開始",
-	//...
-	"dialogue.greetings": "こんにちは、{}様！",
-
-```
-
-Then, use the `loc!` macro in your Rust code to fetch and format the strings based on the active locale:
-
-```rust
-use vernacular::{set_language, loc};
+```rust,no_run
+use vernacular::{set_content_path, set_locale, reload, loc};
 
 fn main() {
-	let start_game_text = loc!("ui.main_menu.start_game");
-	// -> "Start Game"
+    set_content_path("assets/loc");
 
-	let greetings_text = loc!("dialogue.greetings", "CoolPlayerName");
-	// -> "Hello there, CoolPlayerName!"
+    let start_game_text = loc!("ui.main_menu.start_game");
+    // -> "Start Game"
 
-	set_language("ja_JP");
+    let greetings_text = loc!("dialogue.greetings", "CoolPlayerName");
+    // -> "Hello there, CoolPlayerName!"
 
-	let start_game_text_ja = loc!("ui.main_menu.start_game");
-	// -> "ゲーム開始"
+    set_locale("ja_JP");
 
-	let greetings_text_ja = loc!("dialogue.greetings", "CoolPlayerName");
-	// -> "こんにちは、CoolPlayerName様！"
+    let start_game_text_ja = loc!("ui.main_menu.start_game");
+    // -> "ゲーム開始"
+
+    let greetings_text_ja = loc!("dialogue.greetings", "CoolPlayerName");
+    // -> "こんにちは、CoolPlayerName様！"
+
+    // Hot-reload translations from disk:
+    reload();
 }
 ```
+
+### Owned Context
+
+Use `VernacularContext` when you need multiple independent translation sets
+(e.g. for tests, editor tools, or mod systems):
+
+```rust,no_run
+use vernacular::{VernacularContext, loc};
+
+let ctx = VernacularContext::new();
+ctx.set_content_path("assets/loc");
+ctx.set_locale("ja_JP");
+
+let text = loc!(ctx => "ui.main_menu.start_game");
+let greeting = loc!(ctx => "dialogue.greetings", "Alice");
+```
+
+---
+
+## Editor-Friendly Codegen
+
+You can generate a strongly-typed `LocKey` enum in your `build.rs` to eliminate typos and enable IDE autocomplete for your localization keys. See the [Codegen Guide](CODEGEN.md) for detailed configuration options.
+
+1. Add `vernacular` to your `[build-dependencies]` with the `codegen` feature enabled:
+   ```toml
+   [build-dependencies]
+   vernacular = { version = "0.2", features = ["codegen"] }
+   ```
+
+2. Create a `build.rs` in your project root:
+   ```rust
+   fn main() {
+       let out_dir = std::env::var("OUT_DIR").unwrap();
+       // Tell Cargo to re-run this script if the translation files change
+       println!("cargo:rerun-if-changed=assets/loc"); 
+       vernacular::codegen::generate_keys("assets/loc", &out_dir);
+   }
+   ```
+
+3. Include the generated file anywhere in your `src/` code:
+   ```rust
+   include!(concat!(env!("OUT_DIR"), "/vernacular_keys.rs"));
+   
+   // Now you can use autocomplete!
+   // let text = loc!(LocKey::UiMainMenuStartGame);
+   ```
+
+---
+
+## Optional Features
+
+Vernacular embraces the "pay for what you use" philosophy. By default, both `csv` and `ron` parsers are enabled. If you only want to use one format, you can disable default features to reduce compile times and binary size:
+
+```toml
+[dependencies]
+vernacular = { version = "0.2", default-features = false, features = ["csv"] }
+```
+
+Available features:
+- `csv`: Enables the CSV parser
+- `ron`: Enables the RON parser (and brings in `serde`)
+- `log`: Routes warnings and errors through the standard `log` crate
+- `codegen`: Exposes the `vernacular::codegen` module for generating `LocKey` enums
 
 ---
 
 ## Roadmap
 
-- Ron based Key-Value Lookup [ ]
-- Editor Friendly Codegen Key Enum [ ]
-- Fluent (.ftl) Support [ ]
+- [x] RON and CSV based Key-Value Lookup
+- [x] Editor Friendly Codegen Key Enum
+- [ ] Fluent (.ftl) Support
 
 ---
 
@@ -69,5 +167,5 @@ Licensed under your choice of:
 
 - MIT License
 - Apache License, Version 2.0
-- GPLv3
-- LGPLv3
+- GNU General Public License, Version 3.0 (GPL-3.0)
+- GNU Lesser General Public License, Version 3.0 (LGPL-3.0)

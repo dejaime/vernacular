@@ -1,0 +1,5 @@
+key,unicode
+ui.🌟.start,Start 🌟 Game
+ui.arabic,مرحبا
+ui.cjk,你好，世界
+ui.template.unicode,"Hello {0}, you have {1} 💖"

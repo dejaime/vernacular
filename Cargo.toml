@@ -1,12 +1,32 @@
 [package]
 name = "vernacular"
-version = "0.1.1"
-edition = "2024"
-
-authors = ["Dejaime de Oliveira <contact@dejai.me>"]
-license = "MIT OR Apache-2.0 OR GPL-3.0-only OR LGPL-3.0-only"
-
+version = "0.2.0"
+edition = "2021"
 description = "A dead-simple localization crate for Rust game development."
-
+rust-version = "1.70"
+license = "MIT OR Apache-2.0 OR GPL-3.0-only OR LGPL-3.0-only"
+repository = "https://github.com/dejaime/vernacular"
+keywords = ["localization", "i18n", "l10n", "game-dev"]
+categories = ["internationalization", "game-development"]
 [dependencies]
-ron = "0.12"
+ron = { version = "0.8", optional = true }
+csv = { version = "1.3", optional = true }
+log = { version = "0.4", optional = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+criterion = "0.5"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[bench]]
+name = "performance"
+harness = false
+
+[features]
+default = ["csv", "ron"]
+csv = ["dep:csv"]
+ron = ["dep:ron"]
+codegen = []
