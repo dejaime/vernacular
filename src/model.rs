@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 /// A map of locales to their translated entries.
 pub type LocaleMap = HashMap<String, HashMap<String, TranslationEntry>>;
@@ -69,7 +69,10 @@ impl TranslationEntry {
                 if let Some(&(next_idx, '{')) = chars.peek() {
                     // Escaped `{` -> `{{`
                     if idx > last_idx {
-                        parts.push(TemplatePart::Text { start: last_idx, end: idx });
+                        parts.push(TemplatePart::Text {
+                            start: last_idx,
+                            end: idx,
+                        });
                     }
                     parts.push(TemplatePart::LiteralOpen);
                     chars.next(); // consume second '{'
@@ -77,7 +80,10 @@ impl TranslationEntry {
                 } else if let Some(&(next_idx, '}')) = chars.peek() {
                     // `{}` format
                     if idx > last_idx {
-                        parts.push(TemplatePart::Text { start: last_idx, end: idx });
+                        parts.push(TemplatePart::Text {
+                            start: last_idx,
+                            end: idx,
+                        });
                     }
                     parts.push(TemplatePart::Arg(seq_idx));
                     has_sequential = true;
@@ -105,7 +111,10 @@ impl TranslationEntry {
                         let inner = &raw[idx + 1..end_idx];
                         if let Ok(num) = inner.parse::<usize>() {
                             if idx > last_idx {
-                                parts.push(TemplatePart::Text { start: last_idx, end: idx });
+                                parts.push(TemplatePart::Text {
+                                    start: last_idx,
+                                    end: idx,
+                                });
                             }
                             parts.push(TemplatePart::Arg(num));
                             has_positional = true;
@@ -125,7 +134,10 @@ impl TranslationEntry {
                 if let Some(&(next_idx, '}')) = chars.peek() {
                     // Escaped `}` -> `}}`
                     if idx > last_idx {
-                        parts.push(TemplatePart::Text { start: last_idx, end: idx });
+                        parts.push(TemplatePart::Text {
+                            start: last_idx,
+                            end: idx,
+                        });
                     }
                     parts.push(TemplatePart::LiteralClose);
                     chars.next(); // consume second '}'
@@ -135,7 +147,10 @@ impl TranslationEntry {
         }
 
         if last_idx < raw.len() {
-            parts.push(TemplatePart::Text { start: last_idx, end: raw.len() });
+            parts.push(TemplatePart::Text {
+                start: last_idx,
+                end: raw.len(),
+            });
         }
 
         if has_sequential && has_positional {

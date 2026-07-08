@@ -101,9 +101,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use model::{TranslationEntry, TemplatePart};
+use model::{TemplatePart, TranslationEntry};
 
 /// The default locale used when a key is missing from the active locale.
 pub const FALLBACK_LOCALE: &str = "en_US";
@@ -189,7 +189,7 @@ impl VernacularContext {
     pub fn available_locales(&self) -> Result<Vec<String>, error::VernacularError> {
         let mut locales = std::collections::HashSet::new();
         let base_path = self.content_path();
-        
+
         let entries = fs::read_dir(&*base_path)?;
         for entry in entries.flatten() {
             let path = entry.path();
@@ -201,7 +201,7 @@ impl VernacularContext {
                 }
             }
         }
-        
+
         let mut sorted: Vec<_> = locales.into_iter().collect();
         sorted.sort();
         Ok(sorted)
@@ -255,7 +255,7 @@ impl VernacularContext {
     pub fn try_reload(&self) -> Result<(), error::AggregateError> {
         self.invalidate_cache();
         let mut errors = Vec::new();
-        
+
         let _guard = mutex_lock(&self.load_lock);
 
         errors.extend(self.do_load_csvs());
@@ -307,7 +307,9 @@ impl VernacularContext {
 
     fn do_load_csvs(&self) -> Vec<error::VernacularError> {
         #[cfg(not(feature = "csv"))]
-        { Vec::new() }
+        {
+            Vec::new()
+        }
 
         #[cfg(feature = "csv")]
         {
@@ -320,7 +322,9 @@ impl VernacularContext {
                     let mut csv_paths: Vec<_> = entries
                         .flatten()
                         .map(|e| e.path())
-                        .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("csv"))
+                        .filter(|p| {
+                            p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("csv")
+                        })
                         .collect();
                     csv_paths.sort();
 
@@ -328,10 +332,12 @@ impl VernacularContext {
                         match parsing::csv::parse_unified(&path) {
                             Ok(data) => self.merge_data(data),
                             Err(e) => {
-                                errors.push(error::VernacularError::Parse(Box::new(error::FileParseError {
-                                    path: path.to_path_buf(),
-                                    source: e,
-                                })));
+                                errors.push(error::VernacularError::Parse(Box::new(
+                                    error::FileParseError {
+                                        path: path.to_path_buf(),
+                                        source: e,
+                                    },
+                                )));
                             }
                         }
                     }
@@ -368,7 +374,7 @@ impl VernacularContext {
         for e in errors {
             crate::v_err!("{}", e);
         }
-        
+
         {
             let mut locales = write_lock(&self.locales_loaded);
             locales.insert(locale.to_string());
@@ -391,7 +397,8 @@ impl VernacularContext {
                 // Process CSVs first (sorted) so RON files can overwrite them deterministically.
                 #[cfg(feature = "csv")]
                 {
-                    let mut csv_paths: Vec<_> = all_files.iter()
+                    let mut csv_paths: Vec<_> = all_files
+                        .iter()
                         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("csv"))
                         .collect();
                     csv_paths.sort();
@@ -399,10 +406,12 @@ impl VernacularContext {
                         match parsing::csv::parse_locale(path) {
                             Ok(data) => self.merge_locale_data(locale, data),
                             Err(e) => {
-                                errors.push(error::VernacularError::Parse(Box::new(error::FileParseError {
-                                    path: path.to_path_buf(),
-                                    source: e,
-                                })));
+                                errors.push(error::VernacularError::Parse(Box::new(
+                                    error::FileParseError {
+                                        path: path.to_path_buf(),
+                                        source: e,
+                                    },
+                                )));
                             }
                         }
                     }
@@ -410,7 +419,8 @@ impl VernacularContext {
 
                 #[cfg(feature = "ron")]
                 {
-                    let mut ron_paths: Vec<_> = all_files.iter()
+                    let mut ron_paths: Vec<_> = all_files
+                        .iter()
                         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("ron"))
                         .collect();
                     ron_paths.sort();
@@ -418,10 +428,12 @@ impl VernacularContext {
                         match parsing::ron::parse(path) {
                             Ok(data) => self.merge_locale_data(locale, data),
                             Err(e) => {
-                                errors.push(error::VernacularError::Parse(Box::new(error::FileParseError {
-                                    path: path.to_path_buf(),
-                                    source: e,
-                                })));
+                                errors.push(error::VernacularError::Parse(Box::new(
+                                    error::FileParseError {
+                                        path: path.to_path_buf(),
+                                        source: e,
+                                    },
+                                )));
                             }
                         }
                     }
@@ -472,7 +484,7 @@ impl VernacularContext {
     fn with_entry<R>(&self, key: &str, f: impl FnOnce(Option<&TranslationEntry>) -> R) -> R {
         let current = self.current_locale();
         let fallback = self.fallback_locale();
-        
+
         let locale = current.unwrap_or_else(|| Arc::clone(&fallback));
 
         // 1. Ensure locales are loaded BEFORE locking translations to avoid deadlock
@@ -481,7 +493,7 @@ impl VernacularContext {
             let needs_locale = !locales.contains(&*locale);
             let needs_fallback = locale != fallback && !locales.contains(&*fallback);
             drop(locales);
-            
+
             if needs_locale {
                 self.load_locale(&locale);
             }
@@ -492,12 +504,12 @@ impl VernacularContext {
 
         // 2. Lock translations and perform lookup
         let translations = read_lock(&self.translations);
-        
+
         // Try the active locale first.
         if let Some(entry) = translations.get(&*locale).and_then(|l| l.get(key)) {
             return f(Some(entry));
         }
-        
+
         // Fall back to the fallback locale if it differs (#3).
         if locale != fallback {
             if let Some(entry) = translations.get(&*fallback).and_then(|l| l.get(key)) {
@@ -545,7 +557,9 @@ impl VernacularContext {
                 let mut result = String::with_capacity(cap);
                 for part in &e.template {
                     match part {
-                        TemplatePart::Text { start, end } => result.push_str(&e.value[*start..*end]),
+                        TemplatePart::Text { start, end } => {
+                            result.push_str(&e.value[*start..*end])
+                        }
                         TemplatePart::LiteralOpen => result.push('{'),
                         TemplatePart::LiteralClose => result.push('}'),
                         TemplatePart::Arg(idx) => {
@@ -578,7 +592,9 @@ impl VernacularContext {
 // Compile-time assertion that VernacularContext is Send + Sync.
 const _: () = {
     fn _assert<T: Send + Sync>() {}
-    fn _check() { _assert::<VernacularContext>(); }
+    fn _check() {
+        _assert::<VernacularContext>();
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -715,7 +731,10 @@ mod tests {
         assert_eq!(&*loc!(ctx => "items.sword"), "Iron Sword");
 
         // 3. Argument replacement
-        assert_eq!(loc!(ctx => "dialogue.greetings", "Alice"), "Hello there, Alice!");
+        assert_eq!(
+            loc!(ctx => "dialogue.greetings", "Alice"),
+            "Hello there, Alice!"
+        );
 
         // 4. Change locale
         ctx.set_locale("ja_JP");
@@ -723,8 +742,11 @@ mod tests {
         // 5. Test new locale
         assert_eq!(&*loc!(ctx => "ui.main_menu.start_game"), "ゲーム開始");
         assert_eq!(&*loc!(ctx => "items.sword"), "鉄の剣");
-        assert_eq!(loc!(ctx => "dialogue.greetings", "Bob"), "こんにちは、Bob様！");
-        
+        assert_eq!(
+            loc!(ctx => "dialogue.greetings", "Bob"),
+            "こんにちは、Bob様！"
+        );
+
         // 6. Test reload drops cache and reloads
         ctx.reload();
         assert_eq!(&*loc!(ctx => "ui.main_menu.start_game"), "ゲーム開始");
@@ -738,11 +760,23 @@ mod tests {
         let en_path = dir.path().join("en_US");
         fs::create_dir(&en_path).unwrap();
 
-        fs::write(dir.path().join("overrides.csv"), "locale,en_US\nitems.sword,\"Sword from CSV\"").unwrap();
-        fs::write(en_path.join("overrides.ron"), "{\"items.sword\": \"Sword from RON\"}").unwrap();
+        fs::write(
+            dir.path().join("overrides.csv"),
+            "locale,en_US\nitems.sword,\"Sword from CSV\"",
+        )
+        .unwrap();
+        fs::write(
+            en_path.join("overrides.ron"),
+            "{\"items.sword\": \"Sword from RON\"}",
+        )
+        .unwrap();
 
         ctx.set_content_path(dir.path().to_str().unwrap());
-        assert_eq!(&*loc!(ctx => "items.sword"), "Sword from RON", "RON value should overwrite the CSV value.");
+        assert_eq!(
+            &*loc!(ctx => "items.sword"),
+            "Sword from RON",
+            "RON value should overwrite the CSV value."
+        );
     }
 
     // #1: Stale-state invalidation test
@@ -752,15 +786,20 @@ mod tests {
 
         // Start with a bad path — lookup will try to load and fail silently.
         ctx.set_content_path("/nonexistent/bad/path");
-        assert_eq!(&*loc!(ctx => "ui.main_menu.start_game"), "ui.main_menu.start_game",
-            "Should return raw key for missing content path.");
+        assert_eq!(
+            &*loc!(ctx => "ui.main_menu.start_game"),
+            "ui.main_menu.start_game",
+            "Should return raw key for missing content path."
+        );
 
         // Now set the correct path — cache should be invalidated and re-loaded.
         ctx.set_content_path("samples");
-        assert_eq!(&*loc!(ctx => "ui.main_menu.start_game"), "Start Game",
-            "Should return translated value after fixing the content path.");
+        assert_eq!(
+            &*loc!(ctx => "ui.main_menu.start_game"),
+            "Start Game",
+            "Should return translated value after fixing the content path."
+        );
     }
-
 
     // #2: Deterministic file load order
     #[test]
@@ -777,8 +816,11 @@ mod tests {
         fs::write(en_path.join("b.ron"), "{\"greeting\": \"from B\"}").unwrap();
 
         ctx.set_content_path(dir.path().to_str().unwrap());
-        assert_eq!(&*loc!(ctx => "greeting"), "from B",
-            "Alphabetically later file should overwrite earlier one.");
+        assert_eq!(
+            &*loc!(ctx => "greeting"),
+            "from B",
+            "Alphabetically later file should overwrite earlier one."
+        );
     }
 
     // #3: Per-key fallback
@@ -793,7 +835,11 @@ mod tests {
         fs::create_dir(&ja_path).unwrap();
 
         // en_US has both keys; ja_JP only has one.
-        fs::write(en_path.join("ui.ron"), "{\"greeting\": \"Hello\", \"farewell\": \"Goodbye\"}").unwrap();
+        fs::write(
+            en_path.join("ui.ron"),
+            "{\"greeting\": \"Hello\", \"farewell\": \"Goodbye\"}",
+        )
+        .unwrap();
         fs::write(ja_path.join("ui.ron"), "{\"greeting\": \"こんにちは\"}").unwrap();
 
         ctx.set_content_path(dir.path().to_str().unwrap());
@@ -803,8 +849,11 @@ mod tests {
         assert_eq!(&*loc!(ctx => "greeting"), "こんにちは");
 
         // Key missing from ja_JP — should fall back to en_US.
-        assert_eq!(&*loc!(ctx => "farewell"), "Goodbye",
-            "Missing key should fall back to fallback locale.");
+        assert_eq!(
+            &*loc!(ctx => "farewell"),
+            "Goodbye",
+            "Missing key should fall back to fallback locale."
+        );
 
         // Key missing from both — should return raw key.
         assert_eq!(&*loc!(ctx => "nonexistent"), "nonexistent");
@@ -814,14 +863,14 @@ mod tests {
     #[test]
     fn test_per_key_fallback_fmt() {
         let ctx = VernacularContext::new();
-        
+
         let dir = tempfile::tempdir().unwrap();
         let en_path = dir.path().join("en_US");
         fs::create_dir(&en_path).unwrap();
         fs::write(en_path.join("ui.ron"), "{\"greeting\": \"Hello {0}\"}").unwrap();
 
         ctx.set_content_path(dir.path().to_str().unwrap());
-        
+
         assert_eq!(loc!(ctx => "greeting", "Bob"), "Hello Bob");
         assert_eq!(loc!(ctx => "missing", "Bob"), "missing");
     }
@@ -841,32 +890,33 @@ mod tests {
     fn test_error_chain_preserved() {
         let ctx = VernacularContext::new();
         let dir = tempfile::tempdir().unwrap();
-        
+
         // Malformed RON file
         let en_path = dir.path().join("en_US");
         fs::create_dir(&en_path).unwrap();
         let bad_ron_path = en_path.join("bad.ron");
         fs::write(&bad_ron_path, "{ \"missing_colon\" \"value\" }").unwrap();
-        
+
         ctx.set_content_path(dir.path().to_str().unwrap());
-        
+
         let errs = ctx.try_reload().unwrap_err();
         assert_eq!(errs.len(), 1);
-        
+
         let outer_err = &errs.errors()[0];
         // Outer error should be Parse
         assert!(matches!(outer_err, crate::error::VernacularError::Parse(_)));
-        
+
         // Walk the chain down to FileParseError
         use std::error::Error;
-        let file_err = outer_err.source().and_then(|e| e.downcast_ref::<crate::error::FileParseError>()).unwrap();
+        let file_err = outer_err
+            .source()
+            .and_then(|e| e.downcast_ref::<crate::error::FileParseError>())
+            .unwrap();
         assert_eq!(file_err.path(), bad_ron_path.as_path());
-        
+
         // The file error's source should be the inner parse error (e.g. csv::Error)
         assert!(file_err.source().is_some());
     }
-
-
 
     // New tests from round 3
 
@@ -874,41 +924,49 @@ mod tests {
     fn test_malformed_csv_does_not_panic() {
         let ctx = VernacularContext::new();
         let dir = tempfile::tempdir().unwrap();
-        
+
         // Write a malformed CSV with an empty row
         fs::write(dir.path().join("global.csv"), "locale,en_US\n\nkey,value").unwrap();
-        
+
         ctx.set_content_path(dir.path().to_str().unwrap());
         ctx.set_locale("en_US");
-        
+
         // Just verify it doesn't panic when trying to read
         assert_eq!(&*loc!(ctx => "key"), "value");
     }
-    
+
     #[test]
     fn test_try_reload_validates_and_aggregates_errors() {
         let ctx = VernacularContext::new();
         let dir = tempfile::tempdir().unwrap();
         let en_path = dir.path().join("en_US");
         fs::create_dir(&en_path).unwrap();
-        
+
         // Valid file
         fs::write(en_path.join("valid.ron"), "{\"good\": \"yes\"}").unwrap();
         // Malformed file in en_US
         fs::write(en_path.join("bad.ron"), "{\"bad\": oops").unwrap();
-        
+
         let ja_path = dir.path().join("ja_JP");
         fs::create_dir(&ja_path).unwrap();
         // Malformed file in ja_JP
         fs::write(ja_path.join("bad.ron"), "{ invalid }").unwrap();
 
         ctx.set_content_path(dir.path().to_str().unwrap());
-        
+
         let errors = ctx.try_reload().unwrap_err();
-        assert_eq!(errors.len(), 2, "Should aggregate 2 errors from 2 broken files");
-        
+        assert_eq!(
+            errors.len(),
+            2,
+            "Should aggregate 2 errors from 2 broken files"
+        );
+
         // Ensure valid locale data still populated successfully
-        assert_eq!(&*loc!(ctx => "good"), "yes", "Valid data should still be loaded");
+        assert_eq!(
+            &*loc!(ctx => "good"),
+            "yes",
+            "Valid data should still be loaded"
+        );
     }
 
     #[test]
@@ -926,17 +984,25 @@ mod tests {
         ctx.set_content_path(dir.path().to_str().unwrap());
         ctx.set_locale("ja_JP");
 
-        assert_eq!(&*loc!(ctx => "greet"), "Hello", "Defaults to en_US fallback");
-        
+        assert_eq!(
+            &*loc!(ctx => "greet"),
+            "Hello",
+            "Defaults to en_US fallback"
+        );
+
         ctx.set_fallback_locale("es_ES");
-        assert_eq!(&*loc!(ctx => "greet"), "Hola", "Switches to es_ES fallback without manual reload");
+        assert_eq!(
+            &*loc!(ctx => "greet"),
+            "Hola",
+            "Switches to es_ES fallback without manual reload"
+        );
     }
 
     #[test]
     fn test_available_locales() {
         let ctx = VernacularContext::new();
         let dir = tempfile::tempdir().unwrap();
-        
+
         fs::create_dir(dir.path().join("zz_ZZ")).unwrap();
         fs::create_dir(dir.path().join("aa_AA")).unwrap();
         fs::create_dir(dir.path().join("en_US")).unwrap();
@@ -945,8 +1011,12 @@ mod tests {
 
         ctx.set_content_path(dir.path().to_str().unwrap());
         let locales = ctx.available_locales().unwrap();
-        
-        assert_eq!(locales, vec!["aa_AA", "en_US", "zz_ZZ"], "Should discover sorted valid directories only");
+
+        assert_eq!(
+            locales,
+            vec!["aa_AA", "en_US", "zz_ZZ"],
+            "Should discover sorted valid directories only"
+        );
     }
 
     #[test]
@@ -956,12 +1026,20 @@ mod tests {
         let en_path = dir.path().join("en_US");
         fs::create_dir(&en_path).unwrap();
 
-        fs::write(en_path.join("ui.ron"), "{\"json\": \"{{\\\"key\\\": \\\"value\\\"}}\", \"mixed\": \"{} {{escaped}} {}\"}").unwrap();
+        fs::write(
+            en_path.join("ui.ron"),
+            "{\"json\": \"{{\\\"key\\\": \\\"value\\\"}}\", \"mixed\": \"{} {{escaped}} {}\"}",
+        )
+        .unwrap();
 
         ctx.set_content_path(dir.path().to_str().unwrap());
         ctx.set_locale("en_US");
 
-        assert_eq!(loc!(ctx => "mixed", "A", "B"), "A {escaped} B", "Mixed escaped and normal arguments should work");
+        assert_eq!(
+            loc!(ctx => "mixed", "A", "B"),
+            "A {escaped} B",
+            "Mixed escaped and normal arguments should work"
+        );
     }
 
     #[test]

@@ -126,7 +126,12 @@ impl FileParseError {
 
 impl fmt::Display for FileParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Failed to parse file '{}': {}", self.path.display(), self.source)
+        write!(
+            f,
+            "Failed to parse file '{}': {}",
+            self.path.display(),
+            self.source
+        )
     }
 }
 

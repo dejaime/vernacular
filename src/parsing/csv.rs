@@ -1,8 +1,8 @@
+use crate::error::VernacularError;
+use crate::model::TranslationEntry;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use crate::error::VernacularError;
-use crate::model::TranslationEntry;
 
 /// Parses a "unified" CSV file with one column per locale.
 ///
@@ -15,7 +15,9 @@ use crate::model::TranslationEntry;
 /// The first row is always treated as a header naming the locale columns.
 pub fn parse_unified(path: &Path) -> Result<crate::model::LocaleMap, VernacularError> {
     let mut map: crate::model::LocaleMap = HashMap::new();
-    let mut rdr = csv::ReaderBuilder::new().has_headers(false).from_path(path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_path(path)?;
     let source: Arc<Path> = Arc::from(path.to_path_buf());
 
     let mut locales = Vec::new();
@@ -43,7 +45,11 @@ pub fn parse_unified(path: &Path) -> Result<crate::model::LocaleMap, VernacularE
                         if let Some(locale_map) = map.get_mut(locale) {
                             locale_map.insert(
                                 key.clone(),
-                                TranslationEntry::new(val.to_string(), Arc::clone(&source), line_idx + 1),
+                                TranslationEntry::new(
+                                    val.to_string(),
+                                    Arc::clone(&source),
+                                    line_idx + 1,
+                                ),
                             );
                         }
                     }
@@ -67,11 +73,13 @@ pub fn parse_unified(path: &Path) -> Result<crate::model::LocaleMap, VernacularE
 /// Skips header rows depending on `is_root`.
 pub fn scan_keys(path: &Path, is_root: bool) -> Result<Vec<String>, VernacularError> {
     let mut keys = Vec::new();
-    let mut rdr = csv::ReaderBuilder::new().has_headers(false).from_path(path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_path(path)?;
 
     for (line_idx, result) in rdr.records().enumerate() {
         let record = result?;
-        
+
         // Skip common header rows for both unified and per-locale CSVs.
         if line_idx == 0 {
             if is_root {
@@ -83,7 +91,7 @@ pub fn scan_keys(path: &Path, is_root: bool) -> Result<Vec<String>, VernacularEr
                 }
             }
         }
-        
+
         if let Some(key_field) = record.get(0) {
             let key = key_field.trim().to_string();
             if !key.is_empty() {
@@ -106,7 +114,9 @@ pub fn scan_keys(path: &Path, is_root: bool) -> Result<Vec<String>, VernacularEr
 /// If a `key,value` header row is detected, it is skipped with a warning.
 pub fn parse_locale(path: &Path) -> Result<HashMap<String, TranslationEntry>, VernacularError> {
     let mut locale_map = HashMap::new();
-    let mut rdr = csv::ReaderBuilder::new().has_headers(false).from_path(path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_path(path)?;
     let source: Arc<Path> = Arc::from(path.to_path_buf());
 
     for (line_idx, result) in rdr.records().enumerate() {

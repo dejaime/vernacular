@@ -11,9 +11,8 @@ use std::path::Path;
 pub fn generate_keys<P: AsRef<Path>, Q: AsRef<Path>>(content_path: P, out_dir: Q) {
     let content_path = content_path.as_ref();
     let out_dir = out_dir.as_ref();
-    
-    let mut unique_keys: HashSet<String> = HashSet::new();
 
+    let mut unique_keys: HashSet<String> = HashSet::new();
 
     let mut dirs_to_visit = vec![content_path.to_path_buf()];
     while let Some(dir) = dirs_to_visit.pop() {
@@ -25,7 +24,7 @@ pub fn generate_keys<P: AsRef<Path>, Q: AsRef<Path>>(content_path: P, out_dir: Q
                 } else if path.is_file() {
                     let ext = path.extension().and_then(|e| e.to_str());
                     let is_root = path.parent() == Some(content_path);
-                    
+
                     #[cfg(feature = "csv")]
                     if ext == Some("csv") {
                         match crate::parsing::csv::scan_keys(&path, is_root) {
@@ -35,7 +34,11 @@ pub fn generate_keys<P: AsRef<Path>, Q: AsRef<Path>>(content_path: P, out_dir: Q
                                 }
                             }
                             Err(e) => {
-                                println!("cargo:warning=Failed to scan keys from {}: {}", path.display(), e);
+                                println!(
+                                    "cargo:warning=Failed to scan keys from {}: {}",
+                                    path.display(),
+                                    e
+                                );
                             }
                         }
                     }
@@ -49,7 +52,11 @@ pub fn generate_keys<P: AsRef<Path>, Q: AsRef<Path>>(content_path: P, out_dir: Q
                                 }
                             }
                             Err(e) => {
-                                println!("cargo:warning=Failed to scan keys from {}: {}", path.display(), e);
+                                println!(
+                                    "cargo:warning=Failed to scan keys from {}: {}",
+                                    path.display(),
+                                    e
+                                );
                             }
                         }
                     }
@@ -67,7 +74,9 @@ pub fn generate_keys<P: AsRef<Path>, Q: AsRef<Path>>(content_path: P, out_dir: Q
     for key in sorted_keys {
         let pascal_case = to_pascal_case(&key);
         enum_variants.push_str(&format!("    {pascal_case},\n"));
-        match_arms.push_str(&format!("            LocKey::{pascal_case} => \"{key}\",\n"));
+        match_arms.push_str(&format!(
+            "            LocKey::{pascal_case} => \"{key}\",\n"
+        ));
     }
 
     let generated_code = format!(
@@ -128,7 +137,10 @@ mod tests {
 
     #[test]
     fn test_to_pascal_case() {
-        assert_eq!(to_pascal_case("ui.main_menu.start_game"), "UiMainMenuStartGame");
+        assert_eq!(
+            to_pascal_case("ui.main_menu.start_game"),
+            "UiMainMenuStartGame"
+        );
         assert_eq!(to_pascal_case("dialogue-greeting"), "DialogueGreeting");
         assert_eq!(to_pascal_case("some_key_with_123"), "SomeKeyWith123");
         assert_eq!(to_pascal_case("1st_place"), "Key1stPlace"); // Handles starting numbers
@@ -147,14 +159,14 @@ mod tests {
     fn test_phantom_variant_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let content_path = dir.path();
-        
+
         // Root CSV with non-standard header
         let root_csv = content_path.join("root.csv");
         fs::write(root_csv, "id,en_US\nitems.shield,Shield").unwrap();
-        
+
         let out_dir = tempfile::tempdir().unwrap();
         super::generate_keys(content_path, out_dir.path());
-        
+
         let generated = fs::read_to_string(out_dir.path().join("vernacular_keys.rs")).unwrap();
         assert!(!generated.contains("LocKey::Id"));
         assert!(generated.contains("LocKey::ItemsShield"));

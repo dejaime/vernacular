@@ -1,9 +1,9 @@
 use crate::error::VernacularError;
 use crate::model::TranslationEntry;
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::fs;
 
 /// Parses a RON file containing a flat `String -> String` map.
 ///

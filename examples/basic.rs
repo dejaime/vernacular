@@ -1,4 +1,4 @@
-use vernacular::{set_content_path, set_locale, reload, loc};
+use vernacular::{loc, reload, set_content_path, set_locale};
 
 fn main() {
     // Point to the sample data bundled with the crate.

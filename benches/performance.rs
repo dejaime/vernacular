@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, black_box};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::fs;
 use vernacular::VernacularContext;
 
@@ -48,8 +48,9 @@ pub fn bench_template_format(c: &mut Criterion) {
     let temp_dir = tempfile::tempdir().unwrap();
     fs::write(
         temp_dir.path().join("template.csv"),
-        "key,en_US\nui.msg,Hello {0}! You have {} new messages and {} notifications.\n"
-    ).unwrap();
+        "key,en_US\nui.msg,Hello {0}! You have {} new messages and {} notifications.\n",
+    )
+    .unwrap();
 
     let ctx = VernacularContext::new();
     ctx.set_content_path(temp_dir.path().to_str().unwrap());
@@ -63,5 +64,10 @@ pub fn bench_template_format(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_cold_load, bench_hot_lookup, bench_template_format);
+criterion_group!(
+    benches,
+    bench_cold_load,
+    bench_hot_lookup,
+    bench_template_format
+);
 criterion_main!(benches);
