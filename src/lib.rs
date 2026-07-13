@@ -1158,11 +1158,7 @@ mod tests {
         fs::create_dir(&en_path2).unwrap();
 
         // PATH_1 CSV
-        fs::write(
-            en_path1.join("a.csv"),
-            "key,value\nk1,v1_csv\nk2,v2_csv",
-        )
-        .unwrap();
+        fs::write(en_path1.join("a.csv"), "key,value\nk1,v1_csv\nk2,v2_csv").unwrap();
 
         // PATH_1 RON
         fs::write(

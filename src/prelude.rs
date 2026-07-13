@@ -11,14 +11,6 @@
 //! ```
 
 pub use crate::{
-    loc,
-    set_content_path,
-    add_content_path,
-    set_fallback_locale,
-    set_locale,
-    reload,
-    try_reload,
-    available_locales,
-    localize,
-    VernacularContext,
+    add_content_path, available_locales, loc, localize, reload, set_content_path,
+    set_fallback_locale, set_locale, try_reload, VernacularContext,
 };
