@@ -1,7 +1,7 @@
 
 # Vernacular
 
-[![CI](https://github.com/dejaime/vernacular/actions/workflows/ci.yml/badge.svg)](https://github.com/dejaime/vernacular/actions/workflows/ci.yml)
+[![CI](https://github.com/dejaime/vernacular/actions/workflows/ci.yml/badge.svg)](https://github.com/dejaime/vernacular/blob/main/.github/workflows/rust.yml)
 [![Crates.io](https://img.shields.io/crates/v/vernacular.svg)](https://crates.io/crates/vernacular)
 
 A dead-simple localization crate for Rust game development.
