@@ -142,7 +142,7 @@ You can generate a strongly-typed `LocKey` enum in your `build.rs` to eliminate 
 1. Add `vernacular` to your `[build-dependencies]` with the `codegen` feature enabled:
    ```toml
     [build-dependencies]
-    vernacular = { version = "0.3", features = ["codegen"] }
+    vernacular = { version = "0.4", features = ["codegen"] }
    ```
 
 2. Create a `build.rs` in your project root:
@@ -171,7 +171,7 @@ Vernacular embraces the "pay for what you use" philosophy. By default, both `csv
 
 ```toml
 [dependencies]
-vernacular = { version = "0.3", default-features = false, features = ["csv"] }
+vernacular = { version = "0.4", default-features = false, features = ["csv"] }
 ```
 
 Available features:

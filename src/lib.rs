@@ -101,7 +101,6 @@ pub mod codegen;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use model::{TemplatePart, TranslationEntry};
@@ -133,14 +132,28 @@ fn mutex_lock<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 ///
 /// This type is `Send + Sync` and can be shared across threads via `Arc<VernacularContext>`.
 /// It is intentionally not `Clone`; wrap in [`Arc`] when shared ownership is needed.
+#[derive(Default, Clone, Debug)]
+struct VernacularState {
+    translations: model::LocaleMap,
+    csvs_loaded: bool,
+    locales_loaded: std::collections::HashSet<String>,
+}
+
+/// The core localization context that holds parsed dictionaries.
+///
+/// Each `VernacularContext` maintains its own content path, locale settings,
+/// and translation cache. For most applications, the global singleton
+/// (via free functions like [`set_locale`] and [`localize`]) is sufficient.
+/// Create an explicit context when you need isolation (tests, editor tools, etc.).
+///
+/// This type is `Send + Sync` and can be shared across threads via `Arc<VernacularContext>`.
+/// It is intentionally not `Clone`; wrap in [`Arc`] when shared ownership is needed.
 #[derive(Debug)]
 pub struct VernacularContext {
     current_locale: RwLock<Option<Arc<str>>>,
     fallback_locale: RwLock<Arc<str>>,
     content_paths: RwLock<Vec<Arc<str>>>,
-    translations: RwLock<model::LocaleMap>,
-    csvs_loaded: AtomicBool,
-    locales_loaded: RwLock<std::collections::HashSet<String>>,
+    state: RwLock<Arc<VernacularState>>,
     load_lock: Mutex<()>,
 }
 
@@ -153,9 +166,7 @@ impl Default for VernacularContext {
             current_locale: RwLock::new(None),
             fallback_locale: RwLock::new(Arc::from(FALLBACK_LOCALE)),
             content_paths: RwLock::new(vec![Arc::from("assets/loc")]),
-            translations: RwLock::new(HashMap::new()),
-            csvs_loaded: AtomicBool::new(false),
-            locales_loaded: RwLock::new(std::collections::HashSet::new()),
+            state: RwLock::new(Arc::new(VernacularState::default())),
             load_lock: Mutex::new(()),
         }
     }
@@ -250,7 +261,7 @@ impl VernacularContext {
             return;
         }
         *write_lock(&self.current_locale) = Some(Arc::from(locale));
-        self.load_locale(locale);
+        self.load_lazy(locale, None);
     }
 
     /// Forcefully clears all parsed dictionaries and re-reads everything from disk.
@@ -258,10 +269,32 @@ impl VernacularContext {
     /// If a locale is currently set, its files are re-loaded immediately.
     /// Useful for hot-reload workflows during development.
     pub fn reload(&self) {
-        self.invalidate_cache();
+        let _guard = mutex_lock(&self.load_lock);
+
+        let current_state = read_lock(&self.state).clone();
+        let mut locales_to_load = current_state.locales_loaded.clone();
+
         if let Some(locale) = self.current_locale() {
-            self.load_locale(&locale);
+            locales_to_load.insert(locale.to_string());
         }
+
+        let mut new_state = VernacularState::default();
+
+        let errors = self.do_load_csvs(&mut new_state.translations);
+        for e in errors {
+            crate::v_err!("{}", e);
+        }
+        new_state.csvs_loaded = true;
+
+        for locale in locales_to_load {
+            let errors = self.do_load_locale(&locale, &mut new_state.translations);
+            for e in errors {
+                crate::v_err!("{}", e);
+            }
+            new_state.locales_loaded.insert(locale);
+        }
+
+        *write_lock(&self.state) = Arc::new(new_state);
     }
 
     /// Strictly validates all loaded files and returns aggregated errors.
@@ -271,25 +304,27 @@ impl VernacularContext {
     /// everything as loaded regardless of partial failures, to avoid lazy-loading
     /// retry spam.
     pub fn try_reload(&self) -> Result<(), error::AggregateError> {
-        self.invalidate_cache();
+        let _guard = mutex_lock(&self.load_lock);
         let mut errors = Vec::new();
 
-        let _guard = mutex_lock(&self.load_lock);
+        let mut new_state = VernacularState::default();
 
-        errors.extend(self.do_load_csvs());
-        self.csvs_loaded.store(true, Ordering::Release);
+        errors.extend(self.do_load_csvs(&mut new_state.translations));
+        new_state.csvs_loaded = true;
 
         match self.available_locales() {
             Ok(locales) => {
                 for locale in locales {
-                    errors.extend(self.do_load_locale(&locale));
-                    write_lock(&self.locales_loaded).insert(locale);
+                    errors.extend(self.do_load_locale(&locale, &mut new_state.translations));
+                    new_state.locales_loaded.insert(locale);
                 }
             }
             Err(e) => {
                 errors.push(e);
             }
         }
+
+        *write_lock(&self.state) = Arc::new(new_state);
 
         if errors.is_empty() {
             Ok(())
@@ -301,31 +336,58 @@ impl VernacularContext {
     /// Clears all cached load state so that the next lookup re-reads from disk.
     fn invalidate_cache(&self) {
         let _guard = mutex_lock(&self.load_lock);
-        write_lock(&self.translations).clear();
-        write_lock(&self.locales_loaded).clear();
-        self.csvs_loaded.store(false, Ordering::Release);
+        *write_lock(&self.state) = Arc::new(VernacularState::default());
     }
 
-    fn ensure_csvs_are_loaded(&self) {
-        if self.csvs_loaded.load(Ordering::Acquire) {
-            return;
-        }
+    fn load_lazy(&self, locale: &str, fallback: Option<&str>) {
         let _guard = mutex_lock(&self.load_lock);
-        if self.csvs_loaded.load(Ordering::Acquire) {
+        let state = read_lock(&self.state).clone();
+
+        let needs_csvs = !state.csvs_loaded;
+        let needs_locale = !state.locales_loaded.contains(locale);
+        let needs_fallback = fallback
+            .map(|fb| !state.locales_loaded.contains(fb))
+            .unwrap_or(false);
+
+        if !needs_csvs && !needs_locale && !needs_fallback {
             return;
         }
 
-        let errors = self.do_load_csvs();
-        for e in errors {
-            crate::v_err!("{}", e);
+        let mut new_state = (*state).clone();
+
+        if needs_csvs {
+            let errors = self.do_load_csvs(&mut new_state.translations);
+            for e in errors {
+                crate::v_err!("{}", e);
+            }
+            new_state.csvs_loaded = true;
         }
 
-        self.csvs_loaded.store(true, Ordering::Release);
+        if needs_locale {
+            let errors = self.do_load_locale(locale, &mut new_state.translations);
+            for e in errors {
+                crate::v_err!("{}", e);
+            }
+            new_state.locales_loaded.insert(locale.to_string());
+        }
+
+        if needs_fallback {
+            if let Some(fb) = fallback {
+                let errors = self.do_load_locale(fb, &mut new_state.translations);
+                for e in errors {
+                    crate::v_err!("{}", e);
+                }
+                new_state.locales_loaded.insert(fb.to_string());
+            }
+        }
+
+        *write_lock(&self.state) = Arc::new(new_state);
     }
 
-    fn do_load_csvs(&self) -> Vec<error::VernacularError> {
+    fn do_load_csvs(&self, translations: &mut model::LocaleMap) -> Vec<error::VernacularError> {
         #[cfg(not(feature = "csv"))]
         {
+            let _ = translations;
             Vec::new()
         }
 
@@ -348,7 +410,7 @@ impl VernacularContext {
 
                         for path in csv_paths {
                             match parsing::csv::parse_unified(&path) {
-                                Ok(data) => self.merge_data(data),
+                                Ok(data) => self.merge_data(translations, data),
                                 Err(e) => {
                                     errors.push(error::VernacularError::Parse(Box::new(
                                         error::FileParseError {
@@ -370,37 +432,11 @@ impl VernacularContext {
         }
     }
 
-    fn load_locale(&self, locale: &str) {
-        self.ensure_csvs_are_loaded();
-
-        {
-            let locales = read_lock(&self.locales_loaded);
-            if locales.contains(locale) {
-                return;
-            }
-        }
-
-        let _guard = mutex_lock(&self.load_lock);
-
-        {
-            let locales = read_lock(&self.locales_loaded);
-            if locales.contains(locale) {
-                return;
-            }
-        }
-
-        let errors = self.do_load_locale(locale);
-        for e in errors {
-            crate::v_err!("{}", e);
-        }
-
-        {
-            let mut locales = write_lock(&self.locales_loaded);
-            locales.insert(locale.to_string());
-        }
-    }
-
-    fn do_load_locale(&self, locale: &str) -> Vec<error::VernacularError> {
+    fn do_load_locale(
+        &self,
+        locale: &str,
+        translations: &mut model::LocaleMap,
+    ) -> Vec<error::VernacularError> {
         let mut errors = Vec::new();
         let base_paths = self.content_paths();
 
@@ -425,7 +461,7 @@ impl VernacularContext {
                         csv_paths.sort();
                         for path in csv_paths {
                             match parsing::csv::parse_locale(path) {
-                                Ok(data) => self.merge_locale_data(locale, data),
+                                Ok(data) => self.merge_locale_data(translations, locale, data),
                                 Err(e) => {
                                     errors.push(error::VernacularError::Parse(Box::new(
                                         error::FileParseError {
@@ -447,7 +483,7 @@ impl VernacularContext {
                         ron_paths.sort();
                         for path in ron_paths {
                             match parsing::ron::parse(path) {
-                                Ok(data) => self.merge_locale_data(locale, data),
+                                Ok(data) => self.merge_locale_data(translations, locale, data),
                                 Err(e) => {
                                     errors.push(error::VernacularError::Parse(Box::new(
                                         error::FileParseError {
@@ -474,8 +510,12 @@ impl VernacularContext {
         errors
     }
 
-    fn merge_locale_data(&self, locale: &str, new_entries: HashMap<String, TranslationEntry>) {
-        let mut translations = write_lock(&self.translations);
+    fn merge_locale_data(
+        &self,
+        translations: &mut model::LocaleMap,
+        locale: &str,
+        new_entries: HashMap<String, TranslationEntry>,
+    ) {
         let locale_map = translations.entry(locale.to_string()).or_default();
         for (key, new_entry) in new_entries {
             if let Some(existing) = locale_map.get(&key) {
@@ -494,9 +534,9 @@ impl VernacularContext {
     }
 
     #[cfg(feature = "csv")]
-    fn merge_data(&self, data: model::LocaleMap) {
+    fn merge_data(&self, translations: &mut model::LocaleMap, data: model::LocaleMap) {
         for (locale, new_entries) in data {
-            self.merge_locale_data(&locale, new_entries);
+            self.merge_locale_data(translations, &locale, new_entries);
         }
     }
 
@@ -509,32 +549,37 @@ impl VernacularContext {
 
         let locale = current.unwrap_or_else(|| Arc::clone(&fallback));
 
-        // 1. Ensure locales are loaded BEFORE locking translations to avoid deadlock
+        // 1. Ensure locales are loaded
         {
-            let locales = read_lock(&self.locales_loaded);
-            let needs_locale = !locales.contains(&*locale);
-            let needs_fallback = locale != fallback && !locales.contains(&*fallback);
-            drop(locales);
+            let state = read_lock(&self.state).clone();
+            let needs_csvs = !state.csvs_loaded;
+            let needs_locale = !state.locales_loaded.contains(&*locale);
+            let needs_fallback = locale != fallback && !state.locales_loaded.contains(&*fallback);
+            drop(state);
 
-            if needs_locale {
-                self.load_locale(&locale);
-            }
-            if needs_fallback {
-                self.load_locale(&fallback);
+            if needs_csvs || needs_locale || needs_fallback {
+                self.load_lazy(
+                    &locale,
+                    if needs_fallback {
+                        Some(&fallback)
+                    } else {
+                        None
+                    },
+                );
             }
         }
 
-        // 2. Lock translations and perform lookup
-        let translations = read_lock(&self.translations);
+        // 2. Fetch the state atomically and perform lookup
+        let state = read_lock(&self.state).clone();
 
         // Try the active locale first.
-        if let Some(entry) = translations.get(&*locale).and_then(|l| l.get(key)) {
+        if let Some(entry) = state.translations.get(&*locale).and_then(|l| l.get(key)) {
             return f(Some(entry));
         }
 
         // Fall back to the fallback locale if it differs (#3).
         if locale != fallback {
-            if let Some(entry) = translations.get(&*fallback).and_then(|l| l.get(key)) {
+            if let Some(entry) = state.translations.get(&*fallback).and_then(|l| l.get(key)) {
                 return f(Some(entry));
             }
         }
@@ -1213,5 +1258,53 @@ mod tests {
 
         ctx.set_content_path("samples");
         assert_eq!(ctx.content_paths(), vec![Arc::from("samples")]);
+    }
+
+    #[test]
+    fn test_atomic_reload_concurrency() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let ctx = Arc::new(VernacularContext::new());
+        ctx.set_content_path("assets/loc");
+        ctx.set_locale("en_US");
+
+        // Warm up and verify the key exists
+        let original_val = ctx.localize("ui.main_menu.start_game");
+        assert_eq!(&*original_val, "Start Game");
+
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // Spawn readers
+        let mut handles = vec![];
+        for _ in 0..4 {
+            let ctx_clone = Arc::clone(&ctx);
+            let stop_clone = Arc::clone(&stop);
+            handles.push(thread::spawn(move || {
+                while !stop_clone.load(Ordering::Relaxed) {
+                    let val = ctx_clone.localize("ui.main_menu.start_game");
+                    // If reload is not atomic (e.g. it clears translations first),
+                    // this will temporarily return the raw key "ui.main_menu.start_game".
+                    assert_eq!(&*val, "Start Game");
+                }
+            }));
+        }
+
+        // Spawn reloader
+        let ctx_clone = Arc::clone(&ctx);
+        let stop_clone = Arc::clone(&stop);
+        let reloader_handle = thread::spawn(move || {
+            for _ in 0..100 {
+                ctx_clone.reload();
+                thread::sleep(std::time::Duration::from_millis(1));
+            }
+            stop_clone.store(true, Ordering::Relaxed);
+        });
+
+        reloader_handle.join().unwrap();
+        for handle in handles {
+            handle.join().unwrap();
+        }
     }
 }

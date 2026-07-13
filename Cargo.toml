@@ -1,6 +1,6 @@
 [package]
 name = "vernacular"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "A dead-simple localization crate for Rust game development."
 rust-version = "1.70"
