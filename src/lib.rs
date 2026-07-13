@@ -93,6 +93,7 @@ macro_rules! v_err {
 pub mod error;
 pub mod model;
 pub mod parsing;
+pub mod prelude;
 
 #[cfg(feature = "codegen")]
 pub mod codegen;
@@ -136,7 +137,7 @@ fn mutex_lock<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub struct VernacularContext {
     current_locale: RwLock<Option<Arc<str>>>,
     fallback_locale: RwLock<Arc<str>>,
-    content_path: RwLock<Arc<str>>,
+    content_paths: RwLock<Vec<Arc<str>>>,
     translations: RwLock<model::LocaleMap>,
     csvs_loaded: AtomicBool,
     locales_loaded: RwLock<std::collections::HashSet<String>>,
@@ -151,7 +152,7 @@ impl Default for VernacularContext {
         Self {
             current_locale: RwLock::new(None),
             fallback_locale: RwLock::new(Arc::from(FALLBACK_LOCALE)),
-            content_path: RwLock::new(Arc::from("assets/loc")),
+            content_paths: RwLock::new(vec![Arc::from("assets/loc")]),
             translations: RwLock::new(HashMap::new()),
             csvs_loaded: AtomicBool::new(false),
             locales_loaded: RwLock::new(std::collections::HashSet::new()),
@@ -179,24 +180,26 @@ impl VernacularContext {
         read_lock(&self.fallback_locale).clone()
     }
 
-    /// Returns the current content path.
+    /// Returns the current list of content paths.
     #[must_use]
-    pub fn content_path(&self) -> Arc<str> {
-        read_lock(&self.content_path).clone()
+    pub fn content_paths(&self) -> Vec<Arc<str>> {
+        read_lock(&self.content_paths).clone()
     }
 
-    /// Returns a sorted list of all discoverable locales by inspecting the content path.
+    /// Returns a sorted list of all discoverable locales by inspecting the content paths.
     pub fn available_locales(&self) -> Result<Vec<String>, error::VernacularError> {
         let mut locales = std::collections::HashSet::new();
-        let base_path = self.content_path();
+        let paths = self.content_paths();
 
-        let entries = fs::read_dir(&*base_path)?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if !name.starts_with('.') {
-                        locales.insert(name.to_string());
+        for base_path in paths {
+            let entries = fs::read_dir(&*base_path)?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !name.starts_with('.') {
+                            locales.insert(name.to_string());
+                        }
                     }
                 }
             }
@@ -209,10 +212,25 @@ impl VernacularContext {
 
     /// Sets the root directory where translation files are located.
     ///
-    /// This invalidates all cached translations so that the next lookup
+    /// This clears all previously added content paths, adds the new path,
+    /// and invalidates all cached translations so that the next lookup
     /// re-reads from disk using the new path.
     pub fn set_content_path(&self, path: &str) {
-        *write_lock(&self.content_path) = Arc::from(path);
+        {
+            let mut paths = write_lock(&self.content_paths);
+            paths.clear();
+            paths.push(Arc::from(path));
+        }
+        self.invalidate_cache();
+    }
+
+    /// Adds a root directory where translation files are located.
+    ///
+    /// This appends the new path in addition to all previously added content paths,
+    /// and invalidates all cached translations so that the next lookup
+    /// re-reads from disk using all registered paths.
+    pub fn add_content_path(&self, path: &str) {
+        write_lock(&self.content_paths).push(Arc::from(path));
         self.invalidate_cache();
     }
 
@@ -314,36 +332,37 @@ impl VernacularContext {
         #[cfg(feature = "csv")]
         {
             let mut errors = Vec::new();
-            let base_path = self.content_path();
+            let base_paths = self.content_paths();
 
-            match fs::read_dir(&*base_path) {
-                Ok(entries) => {
-                    // Collect and sort paths for deterministic load order.
-                    let mut csv_paths: Vec<_> = entries
-                        .flatten()
-                        .map(|e| e.path())
-                        .filter(|p| {
-                            p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("csv")
-                        })
-                        .collect();
-                    csv_paths.sort();
+            for base_path in base_paths {
+                match fs::read_dir(&*base_path) {
+                    Ok(entries) => {
+                        let mut csv_paths: Vec<_> = entries
+                            .flatten()
+                            .map(|e| e.path())
+                            .filter(|p| {
+                                p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("csv")
+                            })
+                            .collect();
+                        csv_paths.sort();
 
-                    for path in csv_paths {
-                        match parsing::csv::parse_unified(&path) {
-                            Ok(data) => self.merge_data(data),
-                            Err(e) => {
-                                errors.push(error::VernacularError::Parse(Box::new(
-                                    error::FileParseError {
-                                        path: path.to_path_buf(),
-                                        source: e,
-                                    },
-                                )));
+                        for path in csv_paths {
+                            match parsing::csv::parse_unified(&path) {
+                                Ok(data) => self.merge_data(data),
+                                Err(e) => {
+                                    errors.push(error::VernacularError::Parse(Box::new(
+                                        error::FileParseError {
+                                            path: path.to_path_buf(),
+                                            source: e,
+                                        },
+                                    )));
+                                }
                             }
                         }
                     }
-                }
-                Err(e) => {
-                    errors.push(error::VernacularError::Io(e));
+                    Err(e) => {
+                        errors.push(error::VernacularError::Io(e));
+                    }
                 }
             }
 
@@ -383,69 +402,72 @@ impl VernacularContext {
 
     fn do_load_locale(&self, locale: &str) -> Vec<error::VernacularError> {
         let mut errors = Vec::new();
-        let base = self.content_path();
-        let dir_path = Path::new(&*base).join(locale);
-        match fs::read_dir(dir_path) {
-            Ok(entries) => {
-                // Collect all file paths once, then process by type.
-                let all_files: Vec<_> = entries
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.is_file())
-                    .collect();
+        let base_paths = self.content_paths();
 
-                // Process CSVs first (sorted) so RON files can overwrite them deterministically.
-                #[cfg(feature = "csv")]
-                {
-                    let mut csv_paths: Vec<_> = all_files
-                        .iter()
-                        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("csv"))
+        for base in base_paths {
+            let dir_path = Path::new(&*base).join(locale);
+            match fs::read_dir(dir_path) {
+                Ok(entries) => {
+                    // Collect all file paths once, then process by type.
+                    let all_files: Vec<_> = entries
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file())
                         .collect();
-                    csv_paths.sort();
-                    for path in csv_paths {
-                        match parsing::csv::parse_locale(path) {
-                            Ok(data) => self.merge_locale_data(locale, data),
-                            Err(e) => {
-                                errors.push(error::VernacularError::Parse(Box::new(
-                                    error::FileParseError {
-                                        path: path.to_path_buf(),
-                                        source: e,
-                                    },
-                                )));
+
+                    // Process CSVs first (sorted) so RON files can overwrite them deterministically.
+                    #[cfg(feature = "csv")]
+                    {
+                        let mut csv_paths: Vec<_> = all_files
+                            .iter()
+                            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("csv"))
+                            .collect();
+                        csv_paths.sort();
+                        for path in csv_paths {
+                            match parsing::csv::parse_locale(path) {
+                                Ok(data) => self.merge_locale_data(locale, data),
+                                Err(e) => {
+                                    errors.push(error::VernacularError::Parse(Box::new(
+                                        error::FileParseError {
+                                            path: path.to_path_buf(),
+                                            source: e,
+                                        },
+                                    )));
+                                }
                             }
                         }
                     }
-                }
 
-                #[cfg(feature = "ron")]
-                {
-                    let mut ron_paths: Vec<_> = all_files
-                        .iter()
-                        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("ron"))
-                        .collect();
-                    ron_paths.sort();
-                    for path in ron_paths {
-                        match parsing::ron::parse(path) {
-                            Ok(data) => self.merge_locale_data(locale, data),
-                            Err(e) => {
-                                errors.push(error::VernacularError::Parse(Box::new(
-                                    error::FileParseError {
-                                        path: path.to_path_buf(),
-                                        source: e,
-                                    },
-                                )));
+                    #[cfg(feature = "ron")]
+                    {
+                        let mut ron_paths: Vec<_> = all_files
+                            .iter()
+                            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("ron"))
+                            .collect();
+                        ron_paths.sort();
+                        for path in ron_paths {
+                            match parsing::ron::parse(path) {
+                                Ok(data) => self.merge_locale_data(locale, data),
+                                Err(e) => {
+                                    errors.push(error::VernacularError::Parse(Box::new(
+                                        error::FileParseError {
+                                            path: path.to_path_buf(),
+                                            source: e,
+                                        },
+                                    )));
+                                }
                             }
                         }
                     }
-                }
 
-                let _ = &all_files;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Ignore missing locale directory
-            }
-            Err(e) => {
-                errors.push(error::VernacularError::Io(e));
+                    let _ = &all_files;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Ignore missing locale directory in this path
+                }
+                Err(e) => {
+                    errors.push(error::VernacularError::Io(e));
+                }
             }
         }
 
@@ -613,10 +635,19 @@ fn get_global_context() -> &'static VernacularContext {
 
 /// Sets the root directory where translation files are located (global context).
 ///
+/// Clears all previously added paths and sets this as the primary content path.
 /// Invalidates all cached translations so that the next lookup re-reads
 /// from disk using the new path.
 pub fn set_content_path(path: &str) {
     get_global_context().set_content_path(path);
+}
+
+/// Adds a root directory where translation files are located in addition to existing ones (global context).
+///
+/// Invalidates all cached translations so that the next lookup re-reads
+/// from disk using all registered paths.
+pub fn add_content_path(path: &str) {
+    get_global_context().add_content_path(path);
 }
 
 /// Sets the fallback locale for the global context.
@@ -1112,5 +1143,79 @@ mod tests {
             &*ctx.localize_fmt("ui.template.unicode", &[&"Alice", &"5"]),
             "Hello Alice, you have 5 💖"
         );
+    }
+
+    #[test]
+    fn test_multiple_content_paths_merge_order() {
+        let ctx = VernacularContext::new();
+
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+
+        let en_path1 = dir1.path().join("en_US");
+        let en_path2 = dir2.path().join("en_US");
+        fs::create_dir(&en_path1).unwrap();
+        fs::create_dir(&en_path2).unwrap();
+
+        // PATH_1 CSV
+        fs::write(
+            en_path1.join("a.csv"),
+            "key,value\nk1,v1_csv\nk2,v2_csv",
+        )
+        .unwrap();
+
+        // PATH_1 RON
+        fs::write(
+            en_path1.join("a.ron"),
+            "{\"k2\": \"v2_ron\", \"k3\": \"v3_ron\"}",
+        )
+        .unwrap();
+
+        // PATH_2 CSV
+        fs::write(
+            en_path2.join("b.csv"),
+            "key,value\nk3,v3_csv_new\nk4,v4_csv",
+        )
+        .unwrap();
+
+        // PATH_2 RON
+        fs::write(
+            en_path2.join("b.ron"),
+            "{\"k4\": \"v4_ron_new\", \"k1\": \"v1_ron_new\"}",
+        )
+        .unwrap();
+
+        ctx.set_content_path(dir1.path().to_str().unwrap());
+        ctx.add_content_path(dir2.path().to_str().unwrap());
+        ctx.set_locale("en_US");
+
+        // k1: Path 2 RON should overwrite Path 1 CSV
+        assert_eq!(&*loc!(ctx => "k1"), "v1_ron_new");
+        // k2: Path 1 RON should overwrite Path 1 CSV
+        assert_eq!(&*loc!(ctx => "k2"), "v2_ron");
+        // k3: Path 2 CSV should overwrite Path 1 RON
+        assert_eq!(&*loc!(ctx => "k3"), "v3_csv_new");
+        // k4: Path 2 RON should overwrite Path 2 CSV
+        assert_eq!(&*loc!(ctx => "k4"), "v4_ron_new");
+
+        // Verify available_locales finds en_US once
+        let locales = ctx.available_locales().unwrap();
+        assert_eq!(locales, vec!["en_US"]);
+    }
+
+    #[test]
+    fn test_set_content_path_clears() {
+        let ctx = VernacularContext::new();
+        ctx.set_content_path("assets/loc");
+        assert_eq!(ctx.content_paths(), vec![Arc::from("assets/loc")]);
+
+        ctx.add_content_path("samples");
+        assert_eq!(
+            ctx.content_paths(),
+            vec![Arc::from("assets/loc"), Arc::from("samples")]
+        );
+
+        ctx.set_content_path("samples");
+        assert_eq!(ctx.content_paths(), vec![Arc::from("samples")]);
     }
 }

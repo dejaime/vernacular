@@ -1,6 +1,9 @@
 
 # Vernacular
 
+[![CI](https://github.com/dejaime/vernacular/actions/workflows/ci.yml/badge.svg)](https://github.com/dejaime/vernacular/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/vernacular.svg)](https://crates.io/crates/vernacular)
+
 A dead-simple localization crate for Rust game development.
 
 ---
@@ -61,10 +64,12 @@ items.shield,Wooden Shield
 
 ## Example Usage
 
+You can import everything needed via `vernacular::prelude::*`.
+
 ### Global Singleton (simplest)
 
 ```rust,no_run
-use vernacular::{set_content_path, set_locale, reload, loc};
+use vernacular::prelude::*;
 
 fn main() {
     set_content_path("assets/loc");
@@ -94,7 +99,7 @@ Use `VernacularContext` when you need multiple independent translation sets
 (e.g. for tests, editor tools, or mod systems):
 
 ```rust,no_run
-use vernacular::{VernacularContext, loc};
+use vernacular::prelude::*;
 
 let ctx = VernacularContext::new();
 ctx.set_content_path("assets/loc");
@@ -106,14 +111,38 @@ let greeting = loc!(ctx => "dialogue.greetings", "Alice");
 
 ---
 
+## Multiple Content Paths
+
+You can configure Vernacular to load from multiple directories. This is useful for modding support, DLCs, or separating base game assets from engine/library assets.
+
+- `set_content_path(path)`: Clears all registered paths and sets the primary content path.
+- `add_content_path(path)`: Registers an additional content path to load from.
+
+When resolving keys, files are loaded in path-registration order, then format order. For example:
+
+```rust
+add_content_path("base_assets");
+add_content_path("mod_assets");
+```
+
+This will load files in the following sequence:
+1. `base_assets` CSV files
+2. `base_assets` RON files
+3. `mod_assets` CSV files
+4. `mod_assets` RON files
+
+As a result, subsequent paths will overwrite previous ones, allowing you to easily override base game translations.
+
+---
+
 ## Editor-Friendly Codegen
 
 You can generate a strongly-typed `LocKey` enum in your `build.rs` to eliminate typos and enable IDE autocomplete for your localization keys. See the [Codegen Guide](CODEGEN.md) for detailed configuration options.
 
 1. Add `vernacular` to your `[build-dependencies]` with the `codegen` feature enabled:
    ```toml
-   [build-dependencies]
-   vernacular = { version = "0.2", features = ["codegen"] }
+    [build-dependencies]
+    vernacular = { version = "0.3", features = ["codegen"] }
    ```
 
 2. Create a `build.rs` in your project root:
@@ -142,7 +171,7 @@ Vernacular embraces the "pay for what you use" philosophy. By default, both `csv
 
 ```toml
 [dependencies]
-vernacular = { version = "0.2", default-features = false, features = ["csv"] }
+vernacular = { version = "0.3", default-features = false, features = ["csv"] }
 ```
 
 Available features:
